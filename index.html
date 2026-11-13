@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="阳光人寿寿险与年金产品公开信息检索工具">
+  <title>产品检索｜公开信息披露助手</title>
+  <link rel="stylesheet" href="源文件/styles.css?v=20261110l">
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true">
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h13m-5-5 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="icon-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6M9 16h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-external" viewBox="0 0 24 24"><path d="M13 5h6v6M19 5l-9 9M17 13v6H5V7h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-filter" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  </svg>
+
+  <header class="site-header">
+    <div class="brand">
+      <img class="brand-logo" src="源文件/assets/logo.png" alt="阳光保险" width="40" height="40">
+      <nav class="view-switch" aria-label="视图切换">
+        <button class="view-btn is-active" type="button" data-view="list" aria-current="page">产品检索</button>
+        <button class="view-btn" type="button" data-view="compare">产品对比<span class="view-count" id="compareBadge" hidden>0</span></button>
+      </nav>
+    </div>
+    <div class="header-meta">
+      <span>基于公开披露信息</span>
+      <span class="header-divider"></span>
+      <a class="header-link" href="https://www.sinosig.com/v/pilu?type=sx&tabIndex=10001_26" target="_blank" rel="noopener noreferrer">访问披露页面<svg><use href="#icon-external"/></svg></a>
+    </div>
+  </header>
+
+  <main>
+    <div id="listView">
+    <section class="hero" aria-labelledby="hero-title">
+      <h1 id="hero-title" class="visually-hidden">产品检索</h1>
+      <div class="search-shell">
+        <svg class="search-icon"><use href="#icon-search"/></svg>
+        <input id="searchInput" type="search" autocomplete="off" placeholder="输入产品名称、责任、关键词等，支持模糊搜索" aria-label="搜索产品" aria-controls="suggestions" aria-expanded="false">
+        <button id="clearSearch" class="clear-search" type="button" aria-label="清空搜索" hidden><svg><use href="#icon-close"/></svg></button>
+        <div id="suggestions" class="suggestions" role="listbox" hidden></div>
+      </div>
+    </section>
+
+    <section class="workspace" aria-label="产品筛选与结果">
+      <button id="mobileFilterToggle" class="mobile-filter-toggle" type="button" aria-expanded="false"><svg><use href="#icon-filter"/></svg>筛选产品</button>
+      <aside id="filterPanel" class="filter-panel">
+        <div class="filter-fields">
+          <div class="filter-field" data-key="company"></div>
+          <div class="filter-field" data-key="mainCategory"></div>
+          <div class="filter-field" data-key="subcategory"></div>
+          <div class="filter-field" data-key="status"></div>
+          <div class="filter-field" data-key="period"></div>
+          <div class="filter-field" data-key="bucket"></div>
+          <div class="filter-field" data-key="payment"></div>
+        </div>
+        <button id="resetFilters" class="act-btn filter-reset" type="button">重置</button>
+      </aside>
+
+      <div class="results-panel">
+        <div class="results-toolbar">
+          <h2>共 <span id="resultCount">0</span> 个产品</h2>
+          <div class="toolbar-actions">
+            <button id="collapseAll" class="act-btn" type="button">全部收起</button>
+            <button id="addAllCompare" class="act-btn" type="button">全部加入对比</button>
+            <button id="pinAll" class="act-btn" type="button">全部置顶</button>
+            <button id="unpinAll" class="act-btn" type="button">全部取消置顶</button>
+            <button id="onlyUnpinned" class="act-btn" type="button" aria-pressed="false">只显示未置顶产品</button>
+            <button id="addPinnedCompare" class="act-btn" type="button">将置顶产品全部加入对比</button>
+            <button id="clearCompareTop" class="act-btn" type="button">清空对比列表</button>
+          </div>
+        </div>
+        <div id="activeFilters" class="active-filters" aria-live="polite"></div>
+        <div id="results" class="product-list" aria-live="polite"></div>
+        <div id="emptyState" class="empty-state" hidden>
+          <span class="empty-mark">0</span>
+          <h3>暂未找到匹配产品</h3>
+          <p>试试减少筛选条件，或使用更短的产品关键词。</p>
+          <button id="emptyReset" type="button">清除全部条件</button>
+        </div>
+      </div>
+    </section>
+    </div>
+
+    <div id="compareView" class="compare-view" hidden>
+      <div class="compare-head">
+        <h1>产品对比<span class="compare-sub" id="compareSub"></span></h1>
+        <div class="compare-head-actions">
+          <button id="clearCompare" class="ghost-btn" type="button">清空全部</button>
+          <button id="backToList" class="ghost-btn" type="button">返回检索</button>
+        </div>
+      </div>
+      <div id="compareEmpty" class="compare-empty" hidden>
+        <span class="empty-mark">＋</span>
+        <h3>还没有加入对比的产品</h3>
+        <p>在检索页的产品卡片上点击「加入产品对比」，最多可同时对比 4 个产品。</p>
+        <button id="compareGoList" type="button">去检索产品</button>
+      </div>
+      <div id="compareBody"></div>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>本工具仅整理公开披露信息，不构成投保建议。具体权利义务以保险合同及公司最新披露文件为准。</p>
+  </footer>
+
+  <script src="源文件/data/products.js?v=20261113t"></script>
+  <script src="源文件/data/yields.js?v=20261113t"></script>
+  <script src="源文件/data/annuity.js?v=20261113t"></script>
+  <script src="源文件/data/gs_products.js?v=20261113t"></script>
+  <script src="源文件/data/gs_yields.js?v=20261113t"></script>
+  <script src="源文件/data/gs_annuity.js?v=20261113t"></script>
+  <script src="源文件/yield.js?v=20261113t"></script>
+  <aside id="similarPanel" class="similar-panel" hidden aria-label="可比产品">
+    <div class="similar-head">
+      <div>
+        <strong id="similarTitle">可比产品</strong>
+        <span class="similar-mp" id="similarMp"></span>
+      </div>
+      <button type="button" class="similar-close" id="similarClose" aria-label="关闭">×</button>
+    </div>
+    <div class="similar-filters" id="similarFilters"></div>
+    <div class="similar-body" id="similarBody"></div>
+  </aside>
+  <div class="similar-backdrop" id="similarBackdrop" hidden></div>
+
+  <script src="源文件/similar.js?v=20261113t"></script>
+  <script src="源文件/compare.js?v=20261113t"></script>
+  <script src="源文件/app.js?v=20261113t"></script>
+</body>
+</html>
