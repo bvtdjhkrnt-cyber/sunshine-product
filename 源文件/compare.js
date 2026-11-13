@@ -15,7 +15,7 @@
   ];
   const COLORS = ["#a9812f", "#245d4c", "#b4451f", "#2f6ea8"];
 
-  const state = { ids: [], tuple: null, detailOpen: false, mode: null, picks: {} };
+  const state = { ids: [], tuple: null, detailOpen: false, chartOpen: false, mode: null, picks: {} };
 
   const el = () => ({
     body: document.getElementById("compareBody"),
@@ -757,7 +757,23 @@
   const num = v => (v === null || v === undefined ? "—" : Math.round(v).toLocaleString("zh-CN"));
 
   // 收益率分析明细：按保单年度罗列各产品 IRR，并标出各自回本年度
-  // 年度取所有产品的并集；某年只有部分产品有数据时，其余单元格留空
+  // 年度取所有产品的并集；默认只显示关键节点，节点之间的年份分段展开
+  const DETAIL_KEY_YEARS = [5, 10, 20, 30];
+
+  function detailGaps(years) {
+    const keys = DETAIL_KEY_YEARS.filter(k => years.indexOf(k) >= 0);
+    if (!keys.length) return [];
+    const bounds = [0].concat(keys).concat([years[years.length - 1] + 1]);
+    const out = [];
+    for (let i = 0; i < bounds.length - 1; i += 1) {
+      const from = bounds[i] + 1;
+      const to = bounds[i + 1] - 1;
+      const list = years.filter(y => y >= from && y <= to);
+      if (list.length) out.push({ from: list[0], to: list[list.length - 1], years: list });
+    }
+    return out;
+  }
+
   function detailTable(ids, series, anyDiv) {
     const drawn = ids.filter(id => series[id]);
     if (!drawn.length) return "";
@@ -770,8 +786,15 @@
       return `<th class="cmp-product-head${off}"><div class="cmp-pid">${esc(p?.id || "")}</div>
         <div class="cmp-pname">${esc(p?.name || "")}</div>${actButtons(id)}</th>`;
     }).join("");
+    const gaps = detailGaps(years);
+    const gapOf = {};
+    gaps.forEach((g, i) => g.years.forEach(y => { gapOf[y] = i; }));
+    // 第一个区间（1–4 年）默认展开
+    const openGap = 0;
     let body = "";
     years.forEach(t => {
+      const gi = gapOf[t];
+      const hide = gi !== undefined && gi !== openGap;
       const cells = ids.map(id => {
         const s = series[id];
         if (!s) return '<td class="cmp-na"></td>';
@@ -783,9 +806,21 @@
           : pct(row.irr);
         return `<td class="${be ? "is-breakeven" : ""}">${val}${be ? '<span class="cmp-be-flag">回本</span>' : ""}</td>`;
       }).join("");
-      body += `<tr><th class="cmp-label">第 ${t} 保单年度</th>${cells}</tr>`;
+      body += `<tr${gi === undefined ? "" : ` data-cmp-gap="${gi}"`}${hide ? " hidden" : ""}><th class="cmp-label">第 ${t} 保单年度</th>${cells}</tr>`;
     });
-    return `<div class="cmp-detail-wrap"><table class="cmp-table cmp-detail-table">
+    const tools = gaps.length
+      ? `<div class="yield-table-tools">
+          <span class="yield-table-hint">默认显示第 ${DETAIL_KEY_YEARS.filter(k => years.indexOf(k) >= 0).join("/")} 保单年度，点右侧分段展开</span>
+          <div class="gap-chips" role="group" aria-label="按区间展开">
+            ${gaps.map((g, i) => {
+              const on = i === openGap;
+              return `<button class="gap-chip${on ? " is-active" : ""}" type="button" data-cmp-gap-btn="${i}" aria-pressed="${on ? "true" : "false"}">
+              <span class="gap-chip-mark">${on ? "−" : "+"}</span>${g.from === g.to ? `${g.from}` : `${g.from}–${g.to}`} 年</button>`;
+            }).join("")}
+          </div>
+        </div>`
+      : "";
+    return `${tools}<div class="cmp-detail-wrap"><table class="cmp-table cmp-detail-table">
       ${colgroup(ids.length)}
       <thead><tr><th class="cmp-label">保单年度</th>${head}</tr></thead>
       <tbody>${body}</tbody>
@@ -899,7 +934,13 @@
     const mpBlock = state.mode === "same" ? (modelPointBar(inter) || "") : mpTableHtml(ids);
     // 只要有一个产品算得出曲线就画；算不出的在产品注脚里单独说明
     const showChart = drawn.length > 0;
-    const chart = showChart ? chartBlock(state.ids, series) : "";
+    const chartOpen = !!state.chartOpen;
+    const chart = showChart
+      ? `<div class="yield-chart-actions">
+          <button class="ghost-btn" type="button" data-cmp-chart-toggle aria-expanded="${chartOpen ? "true" : "false"}">${chartOpen ? "收起曲线" : "查看曲线"}</button>
+        </div>
+        <div data-cmp-chart-wrap${chartOpen ? "" : " hidden"}>${chartBlock(state.ids, series)}</div>`
+      : "";
     const divNote = anyDiv
       ? '<p class="cmp-legend cmp-divnote">斜杠后为含红利口径。</p>'
       : "";
@@ -932,6 +973,7 @@
   function paintCompareCharts() {
     const host = document.querySelector("[data-cmpchart]");
     if (!host || !chartCtx) return;
+    if (host.closest("[hidden]")) return;   // 曲线默认收起，隐藏时量不到宽度
     const cs = getComputedStyle(host);
     const inner = host.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
     const w = inner > 320 ? inner : (host.clientWidth || 760);
@@ -958,6 +1000,14 @@
   function render() {
     const { body, empty } = el();
     if (!body || !empty) return;
+    // 收益率数据是按产品懒加载的：先让缺数据的先加载，完成后自动重渲染一次
+    const YM = window.YieldModule;
+    if (YM && YM.ensure) {
+      const missing = state.ids.filter(id => YM.has(id) && !YM.isLoaded(id));
+      if (missing.length) {
+        Promise.all(missing.map(id => YM.ensure(id).catch(() => {}))).then(() => render());
+      }
+    }
     updateBadge();
     if (!state.ids.length) {
       body.innerHTML = "";
@@ -1065,6 +1115,28 @@
         state.mode = "diff";
         seedPicksFromTuple();
         render();
+        return;
+      }
+      const chartBtn = event.target.closest("[data-cmp-chart-toggle]");
+      if (chartBtn) {
+        state.chartOpen = !state.chartOpen;
+        const wrap = document.querySelector("[data-cmp-chart-wrap]");
+        if (wrap) wrap.hidden = !state.chartOpen;
+        chartBtn.textContent = state.chartOpen ? "收起曲线" : "查看曲线";
+        chartBtn.setAttribute("aria-expanded", state.chartOpen ? "true" : "false");
+        if (state.chartOpen) paintCompareCharts();
+        return;
+      }
+      const gapBtn = event.target.closest("[data-cmp-gap-btn]");
+      if (gapBtn) {
+        const on = gapBtn.getAttribute("aria-pressed") !== "true";
+        const gi = gapBtn.dataset.cmpGapBtn;
+        document.querySelectorAll(`.cmp-detail-table tbody tr[data-cmp-gap="${gi}"]`)
+          .forEach(tr => { tr.hidden = !on; });
+        gapBtn.setAttribute("aria-pressed", on ? "true" : "false");
+        gapBtn.classList.toggle("is-active", on);
+        const mark = gapBtn.querySelector(".gap-chip-mark");
+        if (mark) mark.textContent = on ? "−" : "+";
         return;
       }
       const defPick = event.target.closest("[data-cmp-defidx]");

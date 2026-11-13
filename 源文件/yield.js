@@ -7,6 +7,36 @@
   const DIM_MAP = { 交费期间: "pay", 交费年期: "pay", 缴费期间: "pay", 保险期间: "term", 保障期间: "term", 性别: "sex", 投保年龄: "age" };
   const state = {};
 
+  // ── 按产品懒加载 ───────────────────────────────────────────────────────
+  // 全量收益率数据 170MB，首屏只加载 data/index.js（约 346KB，含 has 标记与模型点区间），
+  // 点开某个产品 / 把它加入对比时，才注入 data/p/{id}.js。
+  const IDX = window.YDATA_INDEX || { has: {}, pts: {} };
+  const DATA_DIR = "源文件/data/p/";
+  const pending = {};
+
+  function loaded(id) {
+    return !!((window.YIELDS || {})[id] || (window.ANNUITY || {})[id]);
+  }
+
+  function hasYield(id) {
+    return loaded(id) || !!(IDX.has && IDX.has[id]);
+  }
+
+  function ensure(id) {
+    if (loaded(id)) return Promise.resolve();
+    if (!hasYield(id)) return Promise.resolve();
+    if (pending[id]) return pending[id];
+    // 用 <script> 注入而不是 fetch：这样 file:// 双击打开也能用
+    pending[id] = new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = DATA_DIR + encodeURIComponent(id) + ".js";
+      el.onload = () => { delete pending[id]; resolve(); };
+      el.onerror = () => { delete pending[id]; reject(new Error("数据加载失败")); };
+      document.head.appendChild(el);
+    });
+    return pending[id];
+  }
+
   function rec(id) {
     return annuityRec(id) || (window.YIELDS || {})[id];
   }
@@ -85,7 +115,8 @@
     if (annCache[id] !== undefined) return annCache[id];
     const src = (window.ANNUITY || {})[id];
     if (!src || !src.points || !src.points.length) {
-      annCache[id] = null;
+      // 不要缓存 null：数据是按产品懒加载的，首次调用时可能还没注入，
+      // 缓存了以后即使加载完也永远读不到
       return null;
     }
     const curves = {};
@@ -203,7 +234,8 @@
   function selFor(id) {
     const r = rec(id);
     if (!r) return null;
-    if (!state[id]) state[id] = { sel: defaultSel(r, 0), open: true, defIdx: 0 };
+    if (!state[id]) state[id] = { sel: defaultSel(r, 0), open: true, defIdx: 0, chartOpen: false };
+    if (state[id].chartOpen === undefined) state[id].chartOpen = false;
     if (state[id].defIdx === undefined) state[id].defIdx = 0;
     return state[id];
   }
@@ -318,8 +350,13 @@
     const rows = cv.map((value, i) => {
       const t = i + 1;
       const paid = Math.min(t, np) * P;
-      const flows = [];
-      for (let k = 0; k < t; k += 1) flows.push(k < np ? -P : 0);
+      // 现金流时点：t=0 是合同生效日。
+      //   保费 → 各保单年度「年初」支付，第 k 年保费记在 t=k-1；
+      //   生存金/年金 → 年度「年末」给付，第 y 年记在 t=y；
+      //   退保现价 → 目标年度「年末」，也在 t=t。
+      // 所以 3 年每年交 1 万 ≠ 趸交 3 万：前者 t=0/1/2 各 -1 万，后者 t=0 一次性 -3 万。
+      const flows = new Array(t + 1).fill(0);
+      for (let k = 0; k < t; k += 1) flows[k] = k < np ? -P : 0;
       let annPaid = 0;
       if (ben) {
         // 给付段由数据给出终止年，满期金已在现价里体现，不重复加
@@ -327,16 +364,16 @@
         for (let y = ben.start; y <= endY; y += 1) {
           const amt = annAt(y);
           if (!amt) continue;
-          flows[y - 1] += amt;
+          flows[y] += amt;          // 年末给付
           annPaid += amt;
         }
         if (ben.sp && ben.start <= t) {
           const spAmt = annAt(ben.start) * ben.sp;
-          flows[ben.start - 1] += spAmt;
+          flows[ben.start] += spAmt;
           annPaid += spAmt;   // 累计领取口径要把一次性给付算进去
         }
       }
-      flows.push(value);
+      flows[t] += value;          // 年末退保价值（与当年给付同时点）
       const rate = irr(flows);
 
       let divRate = null;
@@ -345,8 +382,8 @@
         // 说明书披露的含红利现价是「元」，这里统一换算成每千元保费口径再展示；
         // IRR 用原始金额计算，与展示口径无关。
         const rawDiv = divMap[t];
-        const dFlows = [];
-        for (let k = 0; k < t; k += 1) dFlows.push(k < np ? -div.prem : 0);
+        const dFlows = new Array(t + 1).fill(0);
+        for (let k = 0; k < t; k += 1) dFlows[k] = k < np ? -div.prem : 0;
         // 年金的含红利口径同样要把「含红利累计领取」按年摊进现金流，
         // 否则这一列算的其实是退保口径，会低于含年金领取的保证列。
         if (r.annuity && div.annD) {
@@ -357,12 +394,12 @@
             const n = y - prevY;
             if (n > 0) {
               const each = (a - prevA) / n;
-              for (let yy = prevY + 1; yy <= y; yy += 1) dFlows[yy - 1] += each;
+              for (let yy = prevY + 1; yy <= y; yy += 1) dFlows[yy] += each;   // 年末
             }
             prevY = y; prevA = a;
           }
         }
-        dFlows.push(rawDiv);
+        dFlows[t] += rawDiv;
         const dr = irr(dFlows);
         divRate = dr === null ? null : dr * 100;
         divCv = div.prem ? rawDiv * 1000 / div.prem : rawDiv;
@@ -470,20 +507,16 @@
       <span class="yield-card-label">回本年限${data.hasAnn ? "（含年金领取）" : ""}${hasDiv ? "（保证/含红利）" : ""}</span>
       <strong>${hasDiv ? `${beText} / ${beDText}` : beText}</strong>
     </div>`);
-    const endG = data.hasAnn ? data.end.total : data.end.cv;
-    const endDV = data.endD ? (data.hasAnn ? data.endD.totalD : data.endD.divCv) : null;
-    cards.push(`<div class="yield-card">
-      <span class="yield-card-label">累计保费 / ${data.hasAnn ? "累计领取＋现价" : "期末现价"}${hasDiv ? "（保证/含红利）" : ""}</span>
-      <strong>${fmtNum(data.end.paid)} / ${fmtNum(endG)}${hasDiv && endDV !== null ? " / " + fmtNum(endDV) : ""}</strong>
-      ${hasDiv && data.endD.t !== data.end.t ? `<small>含红利取第 ${data.endD.t} 年披露值</small>` : ""}
-    </div>`);
     return cards.join("");
   }
 
   // 曲线用"按容器实际宽度绘制"的方式，viewBox 宽度 = CSS 像素宽度，
   // 这样 SVG 不做非等比缩放，坐标轴文字不会被拉扁或拉长。
-  function chartHost() {
-    return '<div class="yield-chart" data-chart></div>';
+  function chartHost(open) {
+    return `<div class="yield-chart-actions">
+        <button class="ghost-btn" type="button" data-yield-chart-toggle aria-expanded="${open ? "true" : "false"}">${open ? "收起曲线" : "查看曲线"}</button>
+      </div>
+      <div class="yield-chart" data-chart${open ? "" : " hidden"}></div>`;
   }
 
   // 单调三次插值（Fritsch–Carlson）：曲线平滑，但不会在两个数据点之间越过端点，
@@ -599,7 +632,7 @@
 
   function paintChart(sectionEl, sel) {
     const host = sectionEl.querySelector("[data-chart]");
-    if (!host) return;
+    if (!host || host.hidden) return;      // 曲线默认收起，展开时才画（隐藏时量不到宽度）
     const r = rec(sectionEl.dataset.yieldSection);
     if (!r) return;
     const st = state[sectionEl.dataset.yieldSection] || {};
@@ -631,21 +664,66 @@
     resizeTimer = setTimeout(paintAll, 160);
   });
 
-  function tableHtml(data, open, showDiv) {
-    if (!open) return "";
+  // 详细表：默认只显示关键节点，节点之间的年份按「区间」分段展开
+  const KEY_YEARS = [5, 10, 20, 30];
+
+  // 把年份切成「关键节点」和若干「节点之间的区间」，例如
+  //   1-4 / 5 / 6-9 / 10 / 11-19 / 20 / 21-29 / 30 / 31-70
+  // 只返回非空的区间，供分段展开使用
+  function gapsOf(years) {
+    const keys = KEY_YEARS.filter(k => years.indexOf(k) >= 0);
+    if (!keys.length) return [];
+    const bounds = [0].concat(keys).concat([years[years.length - 1] + 1]);
+    const out = [];
+    for (let i = 0; i < bounds.length - 1; i += 1) {
+      const from = bounds[i] + 1;
+      const to = bounds[i + 1] - 1;
+      const list = years.filter(y => y >= from && y <= to);
+      if (list.length) out.push({ from: list[0], to: list[list.length - 1], years: list });
+    }
+    return out;
+  }
+
+  function tableHtml(data, showDiv, divHint) {
+    const all = data.rows;
+    const years = all.map(r => r.t);
+    const gaps = gapsOf(years);
+    // 行 → 所属区间序号（关键节点不属于任何区间，始终显示）
+    const gapOf = {};
+    gaps.forEach((g, i) => g.years.forEach(y => { gapOf[y] = i; }));
+    // 第一个区间（1–4 年，即第一个关键节点之前的年份）默认展开
+    const openGap = 0;
     let marked = false;
-    const rows = data.rows.map(row => {
+    const line = row => {
       const be = !marked && row.cv >= row.paid;
       if (be) marked = true;
-      return `<tr${be ? ' class="is-breakeven"' : ""}>
+      const gi = gapOf[row.t];
+      const hide = gi !== undefined && gi !== openGap;
+      return `<tr${be ? ' class="is-breakeven"' : ""} data-t="${row.t}"${gi === undefined ? "" : ` data-gap="${gi}"`}${hide ? " hidden" : ""}>
         <td>${row.t}</td><td>${row.age}</td><td>${fmtNum(row.paid)}</td><td>${fmtNum(row.cv)}</td>
         ${data.hasAnn ? `<td>${fmtNum(row.ann)}</td><td>${fmtNum(row.total)}</td>` : ""}
         <td class="${row.irr !== null && row.irr >= 0 ? "pos" : ""}">${fmtPct(row.irr)}</td>
         ${showDiv ? `<td>${row.divCv === null || row.divCv === undefined ? "" : fmtNum(row.divCv)}</td>` : ""}
         ${showDiv ? `<td class="${row.divIrr !== null && row.divIrr !== undefined && row.divIrr >= 0 ? "pos" : ""}">${row.divIrr === null || row.divIrr === undefined ? "" : fmtPct(row.divIrr)}</td>` : ""}
       </tr>`;
-    }).join("");
-    return `<div class="yield-table-wrap">
+    };
+    const rows = all.map(line).join("");
+    // 分段按钮放在表格外面（表格本身可滚动，放里面会被滚出视野）
+    const tools = gaps.length
+      ? `<div class="yield-table-tools">
+          <span class="yield-table-hint">默认显示第 ${KEY_YEARS.filter(k => years.indexOf(k) >= 0).join("/")} 保单年度，点右侧分段展开</span>
+          <div class="gap-chips" role="group" aria-label="按区间展开">
+            ${gaps.map((g, i) => {
+              const on = i === openGap;
+              return `<button class="gap-chip${on ? " is-active" : ""}" type="button" data-yield-gap="${i}" aria-pressed="${on ? "true" : "false"}">
+              <span class="gap-chip-mark">${on ? "−" : "+"}</span>${g.from === g.to ? `${g.from}` : `${g.from}–${g.to}`} 年</button>`;
+            }).join("")}
+          </div>
+        </div>`
+      : "";
+    return `${divHint ? `<p class="yield-table-hint">${esc(divHint)}</p>` : ""}
+      ${tools}
+      <div class="yield-table-wrap">
       <table class="yield-table">
         <thead><tr><th>保单年度</th><th>年龄</th><th>累计保费</th><th>期末现金价值</th>${data.hasAnn ? "<th>累计领取</th><th>领取＋现价</th>" : ""}<th>退保年化</th>${showDiv ? "<th>含红利现价</th><th>含红利年化</th>" : ""}</tr></thead>
         <tbody>${rows}</tbody>
@@ -680,23 +758,17 @@
       adjustable.push("保险期间");
     }
     const adjustableNote = adjustable.length ? `可调整${adjustable.join("、")}。` : "该产品仅披露单一模型点。";
-    const isWhole = milestoneAges(r).length > 0;
-    const matNote = isWhole
-      ? ""
-      : "<br>满期年化按保险期间末的保证现金价值计，即假定期末现金价值等于满期给付金额；若条款另有满期保险金约定，以条款为准。";
     const unitNote = r.sourceUnit
       ? `<br>原始现价表为${r.sourceUnit === "per1000sa" ? "每千元基本保险金额" : r.sourceUnit === "per10000sa" ? "每万元基本保险金额" : "每份"}口径；已按同一模型点的公开年交保险费率换算为每千元年交保费口径，费率缺失的模型点不展示。`
       : "";
     const hasAnyDiv = list.some(d => d.div);
     const cur = defIdx >= 0 ? list[defIdx] : null;
     const divMeta = cur && cur.div
-      ? `<div class="yield-dividend-meta"><strong>红利方式：${esc(divMethod(cur) || "说明书未演示红利")}</strong><span>${cur.div.derived ? "含红利退保总利益＝保证现金价值＋累积红利（均取说明书披露值）" : "含红利现金价值直接取自说明书利益演示表"}</span></div>`
+      ? `<div class="yield-dividend-meta"><strong>红利方式：${esc(divMethod(cur) || "说明书未演示红利")}</strong><span>${cur.div.derived ? "含红利退保总利益＝保证现金价值＋累积红利（均取说明书披露值）" : "含红利现金价值直接取自说明书利益演示表"}。红利仅展示利益演示表中情况，为非保证利益。</span></div>`
       : "";
     let divNote = "";
     if (hasAnyDiv) {
-      if (cur && cur.div) {
-        divNote = `<br>红利方式：${esc(divMethod(cur) || "说明书未演示红利")}；红利为非保证利益，实际分配可能为零。说明书通常只列 1–10 年与部分整十年份，未列年份留空。`;
-      } else {
+      if (!(cur && cur.div)) {
         const where = list.filter(d => d.div)
           .map((d, i) => `${d.age} 岁${d.sex}、${d.pay}`).join("；");
         divNote = cur
@@ -705,16 +777,19 @@
       }
     }
 
+    // 详细表默认只展开这几个关键年度，其余折叠（76 行的表看着累）
+    const divCols = !!(cur && cur.div);
+    const divHint = hasAnyDiv && !divCols ? "仅示例模型点可展示含红利结果" : "";
     return `
       ${divMeta}
       <div class="yield-cards">${cardsHtml(r, data)}</div>
-      ${tableHtml(data, true, hasAnyDiv)}
-      ${chartHost()}
+      ${tableHtml(data, divCols, divHint)}
+      ${chartHost(st.chartOpen)}
       <p class="yield-footnote">
         示例模型点来源：${esc(srcNote)}；${adjustableNote}
       </p>
       <p class="yield-footnote">
-        测算口径：按每千元年交保险费计，保费于各保单年度期初支付，目标年度末退保一次性取回；不含身故给付。数据取自官方现价全表，未做任何插值。${unitNote}${matNote}${divNote}
+        测算口径：按每千元年交保险费计，保费于各保单年度「年初」支付，生存金与退保现价计在「年末」，目标年度末退保一次性取回；不含身故给付。数据取自官方现价全表。${unitNote}${divNote}
       </p>`;
   }
 
@@ -759,7 +834,7 @@
   // 不参与测算的产品必须给出可核对的理由：详情页、对比页共用这一份文案
   function reasonOf(product) {
     if (!product) return "";
-    if (rec(product.id)) return "";
+    if (hasYield(product.id)) return "";
     // 产品自带说明优先（其他保险公司的口径与阳光不同）
     if (product.yieldNote) return product.yieldNote;
     const sub = product.subcategory || "";
@@ -911,7 +986,7 @@
     const th = t => `<th>${t}${hasDiv ? "（保证/含红利）" : ""}</th>`;
     const sparse = rows.some((x, i) => i > 0 && x.y - rows[i - 1].y > 1);
     const capNote = (hasDiv
-      ? "回本按「累计领取＋当年现金价值 ≥ 累计保费」判定；含红利列取说明书红利利益演示值，红利为非保证利益。"
+      ? "回本按「累计领取＋当年现金价值 ≥ 累计保费」判定；含红利列取说明书红利利益演示值。红利仅展示利益演示表中情况，为非保证利益。"
       : "回本按「累计领取＋当年现金价值 ≥ 累计保费」判定；该产品不分红，说明书利益演示只有保证利益一套数值。")
       + (sparse ? "说明书只披露部分保单年度。" : "");
     const card = (label, val, key) => `<div class="yield-card${key ? " is-key" : ""}">
@@ -928,22 +1003,33 @@
     return `
       ${demoSwitcherHtml(r, idx)}
       <div class="yield-dividend-meta"><strong>口径：累计领取＋当年现金价值（含年金领取）</strong>
-        <span>示例模型点：${esc(d.age)} 岁${esc(d.sex)}、${esc(d.pay)}、${esc(d.term || "见说明书")}；年交保费 ${fmtNum(prem)} 元。${list.length > 1 ? `当前为说明书示例 ${idx + 1}（共 ${list.length} 个）。` : ""}数据取自说明书利益演示表，未做任何插值。</span></div>
+        <span>示例模型点：${esc(d.age)} 岁${esc(d.sex)}、${esc(d.pay)}、${esc(d.term || "见说明书")}；年交保费 ${fmtNum(prem)} 元。${list.length > 1 ? `当前为说明书示例 ${idx + 1}（共 ${list.length} 个）。` : ""}数据取自说明书利益演示表。</span></div>
       <div class="yield-cards">
         ${card(`至第 ${r10.y} 保单年度年化${dualSuffix}`, dualPct(r10.irrG, r10.irrD), true)}
         ${r20.y !== r10.y ? card(`至第 ${r20.y} 保单年度年化${dualSuffix}`, dualPct(r20.irrG, r20.irrD), false) : ""}
         ${card("回本年限（含年金领取）" + dualSuffix, hasDiv ? `${beRange("totG")} / ${beRange("totD")}` : beRange("totG"), false)}
-        ${card("累计保费 / 累计领取＋现价" + dualSuffix,
-          `${fmtNum(rows[rows.length - 1].paid)} / ${fmtNum(rows[rows.length - 1].totG)}` +
-          (hasDiv ? " / " + fmtNum(rows[rows.length - 1].totD) : ""), false)}
       </div>
       ${table}
-      ${chartHost()}
-      <p class="yield-chart-caption">${capNote}</p>`;
+      ${chartHost(false)}
+      <p class="yield-chart-caption" data-chart-caption hidden>${capNote}</p>`;
   }
 
   function section(product) {
     const r = rec(product.id);
+    if (!r && hasYield(product.id)) {
+      // 数据还没加载：先占位，加载完自动替换成完整面板
+      ensure(product.id)
+        .then(() => refreshSection(product))
+        .catch(() => {
+          const el = document.querySelector(`[data-yield-section="${product.id}"]`);
+          if (el) el.querySelector(".yield-loading").textContent = "收益率数据加载失败，请刷新页面重试。";
+        });
+      return `
+      <section class="detail-section" data-yield-section="${esc(product.id)}" data-yield-pending>
+        <div class="detail-section-heading"><span>03</span><h3>收益率分析</h3></div>
+        <p class="yield-loading">正在加载该产品的收益率数据…</p>
+      </section>`;
+    }
     if (!r) {
       return `
       <section class="detail-section" data-yield-section="${esc(product.id)}" data-yield-empty>
@@ -972,6 +1058,20 @@
         ${annUnknown ? '<p class="yield-stopped-note">该产品的年金给付结构未能从说明书中还原：表中的年化收益率只反映「退保」口径，未计入年金领取，会明显低于实际领取收益，不宜与其他年金产品横向比较。</p>' : ""}
         ${stopped ? '<p class="yield-stopped-note">该产品已停售，分析结果可能不准确。</p>' : ""}
       </section>`;
+  }
+
+  // 数据加载完成后，把占位的 section 换成真正的面板并重新绑定事件
+  function refreshSection(product) {
+    const el = document.querySelector(`[data-yield-section="${product.id}"]`);
+    if (!el || !rec(product.id)) return;
+    const wrap = document.createElement("div");
+    wrap.innerHTML = section(product);
+    const fresh = wrap.firstElementChild;
+    if (!fresh) return;
+    el.replaceWith(fresh);
+    bind(document, product);
+    const st = selFor(product.id);
+    requestAnimationFrame(() => paintChart(fresh, st.sel));
   }
 
   function rerender(sectionEl, product) {
@@ -1011,6 +1111,32 @@
         if (window.SimilarModule) window.SimilarModule.open(product.id, st.sel);
         return;
       }
+      // 曲线默认收起：点了才画（隐藏状态下量不到容器宽度）
+      const chartBtn = event.target.closest("[data-yield-chart-toggle]");
+      if (chartBtn) {
+        const st = selFor(product.id);
+        st.chartOpen = !st.chartOpen;
+        const host = sectionEl.querySelector("[data-chart]");
+        if (host) host.hidden = !st.chartOpen;
+        const cap = sectionEl.querySelector("[data-chart-caption]");
+        if (cap) cap.hidden = !st.chartOpen;
+        chartBtn.textContent = st.chartOpen ? "收起曲线" : "查看曲线";
+        chartBtn.setAttribute("aria-expanded", st.chartOpen ? "true" : "false");
+        if (st.chartOpen) paintChart(sectionEl, st.sel);
+        return;
+      }
+      // 详细表：按「关键节点之间」的区间分段展开
+      const gapBtn = event.target.closest("[data-yield-gap]");
+      if (gapBtn) {
+        const on = gapBtn.getAttribute("aria-pressed") !== "true";
+        const gi = gapBtn.dataset.yieldGap;
+        sectionEl.querySelectorAll(`tbody tr[data-gap="${gi}"]`).forEach(tr => { tr.hidden = !on; });
+        gapBtn.setAttribute("aria-pressed", on ? "true" : "false");
+        gapBtn.classList.toggle("is-active", on);
+        const mark = gapBtn.querySelector(".gap-chip-mark");
+        if (mark) mark.textContent = on ? "−" : "+";
+        return;
+      }
       const reset = event.target.closest("[data-def-idx]");
       if (reset) {
         const st = selFor(product.id);
@@ -1033,7 +1159,7 @@
     section,
     bind,
     reason: reasonOf,
-    has: id => !!rec(id),
+    has: id => hasYield(id),
     isDemo: id => !!(rec(id) && rec(id).demoOnly),
     // 是否真有两个口径：说明书示例里的含红利列对不分红产品只是保证列的复制
     hasDiv: id => !!rec(id) && defsOf(rec(id)).some(d => {
@@ -1046,8 +1172,12 @@
       if (!v.annD || !v.cvD) return false;
       return v.years.some((y, i) => Math.abs((v.annD[i] + v.cvD[i]) - (v.annG[i] + v.cvG[i])) > 0.5);
     }),
-    hasTable: id => !!rec(id),
+    hasTable: id => hasYield(id),
     record: id => rec(id) || null,
+    // 懒加载：结构数据要等注入后才能用
+    ensure,
+    isLoaded: id => loaded(id),
+    points: id => (IDX.pts && IDX.pts[id]) || [],
     defs: id => (rec(id) ? defsOf(rec(id)) : []),
     dims: id => (rec(id) ? rec(id).dims : {}),
     keyOf: (id, sel) => (rec(id) ? keyOf(rec(id), sel) : ""),

@@ -54,6 +54,39 @@
     return keyInfo(rec, key);
   }
 
+  // 懒加载后不再有全量曲线，改用索引里的「模型点区间」：
+  //   "男|10年|至80周岁|18-60"  →  性别 / 交费期间 / 保险期间 / 年龄区间
+  function payFromLabel(label, age) {
+    if (!label) return 1;                       // 没有交费列 = 趸交
+    if (/趸交|一次性/.test(label)) return 1;
+    let m = label.match(/交至\s*(\d{1,3})\s*周岁/);
+    if (m && age != null) return Math.max(Number(m[1]) - age, 1);
+    m = label.match(/(\d{1,2})\s*年/);
+    return m ? Number(m[1]) : 1;
+  }
+
+  function inRange(spec, age) {
+    if (!spec) return false;
+    const parts = String(spec).split(",");
+    for (const seg of parts) {
+      const m = seg.split("-");
+      if (m.length === 2) {
+        if (age >= Number(m[0]) && age <= Number(m[1])) return true;
+      } else if (Number(seg) === age) return true;
+    }
+    return false;
+  }
+
+  function pointHit(entry, t) {
+    const bits = String(entry).split("|");
+    if (bits.length < 4) return false;
+    const sex = bits[0], payLabel = bits[1], term = bits[2], ages = bits[3];
+    if (sex !== t.sex) return false;
+    if (endAgeOf(term, t.age) !== t.end) return false;
+    if (payFromLabel(payLabel, t.age) !== t.pay) return false;
+    return inRange(ages, t.age);
+  }
+
   function labelOf(info) {
     if (!info) return "";
     const payTxt = info.pay == null ? "—" : (info.pay === 1 ? "趸交" : `${info.pay} 年交`);
@@ -88,15 +121,12 @@
     const t = targetInfo();
     const self = selfProduct();
     if (!t || !self) return [];
+    const YM = window.YieldModule;
     const out = [];
     (window.PRODUCTS || []).forEach(p => {
       if (p.id === cur.id) return;
-      if (!window.YieldModule.has(p.id)) return;
-      const rec = window.YieldModule.record(p.id);
-      const hit = Object.keys(rec.curves).some(k => {
-        const i = keyInfo(rec, k);
-        return i.sex === t.sex && i.age === t.age && i.pay === t.pay && i.end === t.end;
-      });
+      if (!YM.has(p.id)) return;
+      const hit = (YM.points ? YM.points(p.id) : []).some(entry => pointHit(entry, t));
       if (!hit) return;
       if (on.attr && p.mainCategory !== self.mainCategory) return;
       if (on.cat && p.subcategory !== self.subcategory) return;

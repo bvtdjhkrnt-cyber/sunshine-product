@@ -481,6 +481,37 @@ svg { width: 20px; height: 20px; display: block; }
   font-size: 12px; padding: 7px 14px; border-radius: 2px;
 }
 .ghost-btn:hover { border-color: var(--gold); color: var(--gold); }
+.ghost-btn.is-small { padding: 5px 12px; font-size: 12px; }
+
+/* 收益率：曲线默认收起、详细表默认只展开关键年度 */
+.yield-table-hint {
+  margin: 12px 0 0; font-size: 12px; color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.yield-chart-actions { margin-top: 16px; }
+.yield-table-tools {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-top: 14px; flex-wrap: wrap;
+}
+.yield-table-tools .yield-table-hint { margin: 0; }
+/* 分段展开：关键节点之间的年份用这些小按钮逐段打开 */
+.gap-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gap-chip {
+  border: 1px solid var(--line); background: var(--white); color: var(--ink);
+  font-size: 12px; padding: 4px 10px; border-radius: 2px;
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+}
+.gap-chip:hover { border-color: var(--gold); color: var(--gold); }
+.gap-chip.is-active {
+  background: var(--paper-deep); border-color: #c6c3b7; color: var(--ink);
+  box-shadow: inset 0 1px 2px rgba(23, 34, 29, 0.07);
+}
+.gap-chip.is-active:hover { border-color: #b6b2a5; color: var(--ink); }
+.gap-chip-mark { font-family: var(--sans); opacity: 0.75; font-size: 11px; }
+.yield-chart-loading, .yield-loading { font-size: 13px; color: var(--muted); padding: 18px 0; }
+.yield-table-more td, .cmp-detail-more td { text-align: center; padding: 10px 0; background: var(--white); }
+.yield-table-more td { position: sticky; left: 0; }
+.cmp-detail-more td { background: transparent; }
 .compare-empty { text-align: center; padding: 90px 20px; border: 1px dashed var(--line); background: var(--white); }
 .compare-empty h3 { font-family: var(--serif); font-size: 20px; font-weight: 400; margin: 14px 0 8px; }
 .compare-empty p { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
